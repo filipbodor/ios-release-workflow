@@ -1,0 +1,48 @@
+require "fastlane_core/build_watcher"
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Wait for one exact App Store Connect build and submit it for review"
+  lane :submit_release do
+    key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_PATH")
+    )
+
+    bundle_id = ENV.fetch("APP_BUNDLE_ID")
+    version = ENV.fetch("APP_VERSION")
+    build_number = ENV.fetch("APP_BUILD")
+    app = Spaceship::ConnectAPI::App.find(bundle_id)
+    UI.user_error!("App Store Connect could not find #{bundle_id}") unless app
+
+    build = FastlaneCore::BuildWatcher.wait_for_build_processing_to_be_complete(
+      app_id: app.id,
+      platform: "IOS",
+      app_version: version,
+      build_version: build_number,
+      poll_interval: 20,
+      timeout_duration: 1200,
+      return_spaceship_testflight_build: false
+    )
+    if build.processing_state != Spaceship::ConnectAPI::Build::ProcessingState::VALID || build.expired
+      UI.user_error!("Build #{version} (#{build_number}) is not available for review: #{build.processing_state}, expired=#{build.expired}")
+    end
+
+    upload_to_app_store(
+      api_key: key,
+      app_identifier: bundle_id,
+      app_version: version,
+      build_number: build_number,
+      release_notes: { ENV.fetch("RELEASE_LOCALE") => ENV.fetch("RELEASE_NOTES") },
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      force: true,
+      run_precheck_before_submit: false,
+      reject_if_possible: false,
+      submit_for_review: true,
+      automatic_release: ENV.fetch("AUTOMATIC_RELEASE") == "true"
+    )
+  end
+end

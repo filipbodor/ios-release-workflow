@@ -1,0 +1,154 @@
+name: Release iOS
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: Relative path to an Xcode project or workspace
+        required: true
+        type: string
+      scheme:
+        description: Shared iOS app scheme
+        required: true
+        type: string
+      bundle_id:
+        description: Expected app bundle identifier
+        required: true
+        type: string
+      team_id:
+        description: Apple developer Team ID
+        required: true
+        type: string
+      mode:
+        description: check, upload, release, or submit-existing
+        default: check
+        type: string
+      version:
+        description: Expected marketing version, required outside check mode
+        type: string
+      build:
+        description: Expected integer build number, required outside check mode
+        type: string
+      release_notes:
+        description: What's New text for this version
+        type: string
+      locale:
+        description: Existing App Store version localization for the notes
+        default: en-US
+        type: string
+      automatic_release:
+        description: Publish automatically after App Review approves the version
+        default: false
+        type: boolean
+      environment:
+        description: GitHub environment in the calling repository for live Apple operations
+        default: app-store
+        type: string
+    secrets:
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      ASC_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_MODE: ${{ inputs.mode }}
+  XCODE_PROJECT: ${{ inputs.project }}
+  XCODE_SCHEME: ${{ inputs.scheme }}
+  APP_BUNDLE_ID: ${{ inputs.bundle_id }}
+  APPLE_TEAM_ID: ${{ inputs.team_id }}
+  APP_VERSION: ${{ inputs.version }}
+  APP_BUILD: ${{ inputs.build }}
+  RELEASE_NOTES: ${{ inputs.release_notes }}
+  RELEASE_LOCALE: ${{ inputs.locale }}
+  AUTOMATIC_RELEASE: ${{ inputs.automatic_release }}
+
+jobs:
+  check:
+    if: inputs.mode == 'check'
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out the app at the caller commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: app-source
+          persist-credentials: false
+      - name: Check out the release tooling at the workflow commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: release-toolkit
+          persist-credentials: false
+      - name: Build unsigned and check bundle metadata
+        working-directory: app-source
+        run: |
+          python3 ../release-toolkit/scripts/validate.py
+          bash ../release-toolkit/scripts/build.sh build
+
+  publish:
+    if: inputs.mode != 'check'
+    runs-on: macos-26
+    timeout-minutes: 50
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: ios-release-${{ inputs.bundle_id }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out the app at the caller commit
+        if: inputs.mode == 'upload' || inputs.mode == 'release'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: app-source
+          persist-credentials: false
+      - name: Check out the release tooling at the workflow commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: release-toolkit
+          persist-credentials: false
+      - name: Validate release inputs and stage Apple authentication
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          python3 release-toolkit/scripts/validate.py
+          umask 077
+          key_path="$RUNNER_TEMP/asc-release.p8"
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$key_path"
+          echo "ASC_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+      - name: Set up Fastlane
+        if: inputs.mode == 'release' || inputs.mode == 'submit-existing'
+        uses: ruby/setup-ruby@c4e5b1316158f92e3d49443a9d58b31d25ac0f8f # v1.306.0
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: release-toolkit
+      - name: Archive and upload the exact build
+        if: inputs.mode == 'upload' || inputs.mode == 'release'
+        working-directory: app-source
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          bash ../release-toolkit/scripts/build.sh archive
+          bash ../release-toolkit/scripts/upload.sh
+      - name: Wait for processing and submit for App Review
+        if: inputs.mode == 'release' || inputs.mode == 'submit-existing'
+        working-directory: release-toolkit
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          FASTLANE_SKIP_UPDATE_CHECK: 'true'
+          FASTLANE_OPT_OUT_USAGE: 'true'
+        run: bundle exec fastlane ios submit_release
+      - name: Remove the temporary Apple key
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/asc-release.p8"
