@@ -51,6 +51,8 @@ jobs:
       scheme: Example
       bundle_id: com.example.ios
       team_id: ABCDE12345
+      runner: xcode-27
+      minimum_ios_sdk_major: 27
       mode: ${{ inputs.mode }}
       version: ${{ inputs.version }}
       build: ${{ inputs.build }}
@@ -61,6 +63,8 @@ jobs:
       ASC_ISSUER_ID: ${{ inputs.mode != 'check' && secrets.ASC_ISSUER_ID || '' }}
       ASC_PRIVATE_KEY: ${{ inputs.mode != 'check' && secrets.ASC_PRIVATE_KEY || '' }}
 ```
+
+Set `runner` to select a GitHub-hosted macOS image. Set `minimum_ios_sdk_major` to check the SDK recorded in the built app before uploading it. These inputs default to `macos-26` and `0`, respectively.
 
 Run an unsigned check or explicitly start a release from GitHub CLI.
 
