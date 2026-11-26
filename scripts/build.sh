@@ -48,7 +48,20 @@ plist="${apps[0]}/Info.plist"
 bundle_id=$(plutil -extract CFBundleIdentifier raw "$plist")
 version=$(plutil -extract CFBundleShortVersionString raw "$plist")
 build=$(plutil -extract CFBundleVersion raw "$plist")
-printf 'Built %s %s (%s)\n' "$bundle_id" "$version" "$build"
+sdk=$(plutil -extract DTSDKName raw "$plist")
+printf 'Built %s %s (%s) with %s\n' "$bundle_id" "$version" "$build" "$sdk"
+
+minimum_sdk_major=${MIN_IOS_SDK_MAJOR:-0}
+if [[ "$minimum_sdk_major" != 0 ]]; then
+  if [[ ! "$minimum_sdk_major" =~ ^[1-9][0-9]*$ ]]; then
+    echo "minimum_ios_sdk_major must be a positive integer or 0." >&2
+    exit 1
+  fi
+  if [[ ! "$sdk" =~ ^iphoneos([0-9]+)(\.[0-9]+)*$ ]] || (( BASH_REMATCH[1] < minimum_sdk_major )); then
+    echo "The app was built with $sdk. Use iOS SDK $minimum_sdk_major or later." >&2
+    exit 1
+  fi
+fi
 
 if [[ "$bundle_id" != "$APP_BUNDLE_ID" ||
       ( -n "$APP_VERSION" && "$version" != "$APP_VERSION" ) ||
